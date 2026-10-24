@@ -312,4 +312,64 @@ BOOST_AUTO_TEST_CASE(rolling_maturity_check_tx_inputs)
     BOOST_CHECK(spend_at(ROLLING_END + 2, ROLLING_END + 2 + LONG, 0, ROLLING_END));
 }
 
+BOOST_AUTO_TEST_CASE(rolling_never_reduces_a_stricter_maturity)
+{
+    // The rolling rule only ever adds to the maturity the earlier rules require;
+    // it must never let a reward spend sooner than they already demand. On the
+    // mainnet schedule the long window releases exactly where rolling begins, so
+    // the two never overlap and the shorter rolling depth (52560 > any earlier
+    // rule) dominates anyway. This pins the invariant in the case that schedule
+    // never reaches but the code still handles: the long rule covering a coin
+    // while demanding *more* depth than the rolling rule. Both enforcement sites
+    // (CheckTxInputs and CoinbaseMaturityRequired) must take the larger of the
+    // two; dropping the max would release the coin at the shorter rolling depth.
+    constexpr int ROLLING_SMALL{200};
+    constexpr int LONG_BIG{400};
+    static_assert(LONG_BIG > ROLLING_SMALL && ROLLING_SMALL > COINBASE_MATURITY);
+    constexpr int COIN_HEIGHT{1000};
+
+    // Site B: policy / mempool / wallet view.
+    Consensus::Params params;
+    params.CoinbaseMaturityLongStartHeight = 0;
+    params.CoinbaseMaturityLongEnforceHeight = 0;
+    params.CoinbaseMaturityLongReleaseHeight = std::numeric_limits<int>::max();
+    params.CoinbaseMaturityLong = LONG_BIG;
+    params.CoinbaseMaturityRollingStartHeight = 0;
+    params.CoinbaseMaturityRollingEnforceHeight = 0;
+    params.CoinbaseMaturityRolling = ROLLING_SMALL;
+    // Both rules are active at the spend height and both cover the coin.
+    BOOST_CHECK(params.CoinbaseMaturityLongActiveAt(COIN_HEIGHT + LONG_BIG));
+    BOOST_CHECK(params.CoinbaseMaturityRollingActiveAt(COIN_HEIGHT + LONG_BIG));
+    // The stricter (long) depth wins; the shorter rolling depth does not release it.
+    BOOST_CHECK_EQUAL(params.CoinbaseMaturityRequired(COIN_HEIGHT, COIN_HEIGHT + ROLLING_SMALL), LONG_BIG);
+    BOOST_CHECK_EQUAL(params.CoinbaseMaturityRequired(COIN_HEIGHT, COIN_HEIGHT + LONG_BIG), LONG_BIG);
+
+    // Site A: block-level consensus validation enforces the same larger depth.
+    CCoinsView base;
+    CCoinsViewCache view{&base};
+    const auto spend_at{[&](int coin_height, int spend_height) {
+        CMutableTransaction cb;
+        cb.vin.resize(1);
+        cb.vin[0].prevout.SetNull();
+        cb.vout.resize(1);
+        cb.vout[0].nValue = 50 * COIN;
+        cb.vout[0].scriptPubKey = CScript() << OP_TRUE;
+        cb.nLockTime = coin_height; // distinct txid per height
+        const CTransaction coinbase{cb};
+        AddCoins(view, coinbase, coin_height);
+        CMutableTransaction spend;
+        spend.vin.emplace_back(COutPoint{coinbase.GetHash(), 0});
+        spend.vout.emplace_back(49 * COIN, CScript() << OP_TRUE);
+        TxValidationState state;
+        CAmount fee;
+        return Consensus::CheckTxInputs(CTransaction{spend}, state, view, spend_height, fee, CheckTxInputsRules::None,
+                                        LONG_BIG, /*long_start=*/0, ROLLING_SMALL, /*rolling_start=*/0);
+    }};
+    // At the shorter rolling depth the coin is still immature (needs the long depth)...
+    BOOST_CHECK(!spend_at(COIN_HEIGHT, COIN_HEIGHT + ROLLING_SMALL));
+    BOOST_CHECK(!spend_at(COIN_HEIGHT, COIN_HEIGHT + LONG_BIG - 1));
+    // ...and matures exactly at the longer depth.
+    BOOST_CHECK(spend_at(COIN_HEIGHT, COIN_HEIGHT + LONG_BIG));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
