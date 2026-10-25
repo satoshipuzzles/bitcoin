@@ -44,12 +44,22 @@ public:
 };
 
 namespace Consensus {
+struct Params;
+
 /**
  * Check whether all outputs of this transaction satisfy size limits.
  * Regular outputs must be <= MAX_OUTPUT_SCRIPT_SIZE (34 bytes).
  * OP_RETURN outputs must be <= MAX_OUTPUT_DATA_SIZE (83 bytes).
  */
 bool CheckOutputSizes(const CTransaction& tx, TxValidationState& state);
+
+/**
+ * First coinbase height the rolling maturity rule no longer covers on the
+ * chain ending at tip: the first block whose parent's median-time-past has
+ * reached RdtsExpiryTime. std::numeric_limits<int>::max() if the rule does
+ * not end with RDTS, or if tip has not reached the expiry yet.
+ */
+int CoinbaseMaturityRollingEndHeight(const Params& params, const CBlockIndex* tip);
 
 /**
  * Check whether all inputs of this transaction are valid (no double spends and amounts)
@@ -63,7 +73,8 @@ bool CheckOutputSizes(const CTransaction& tx, TxValidationState& state);
  * @param[in] rolling_maturity_start_height First coinbase height requiring coinbase_maturity_rolling,
  *                                         or std::numeric_limits<int>::max() to disable.
  * @param[in] rolling_maturity_end_coin_height First coinbase height no longer requiring
- *                                             coinbase_maturity_rolling, or
+ *                                             coinbase_maturity_rolling (see
+ *                                             CoinbaseMaturityRollingEndHeight), or
  *                                             std::numeric_limits<int>::max() for no end.
  * Preconditions: tx.IsCoinBase() is false.
  */

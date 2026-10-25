@@ -8,6 +8,7 @@
 #include <coins.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
+#include <consensus/params.h>
 #include <consensus/validation.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
@@ -172,6 +173,25 @@ bool Consensus::CheckOutputSizes(const CTransaction& tx, TxValidationState& stat
         }
     }
     return true;
+}
+
+int Consensus::CoinbaseMaturityRollingEndHeight(const Params& params, const CBlockIndex* tip)
+{
+    if (!params.CoinbaseMaturityRollingUntilRdts || !tip || tip->GetMedianTimePast() < params.RdtsExpiryTime) {
+        return std::numeric_limits<int>::max();
+    }
+    // MTP is monotone along a valid branch. Find the first parent at expiry.
+    // Use the spending branch, never the active chain or the candidate's MTP.
+    int low{0}, high{tip->nHeight};
+    while (low < high) {
+        const int mid{low + (high - low) / 2};
+        if (tip->GetAncestor(mid)->GetMedianTimePast() < params.RdtsExpiryTime) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return low + 1;
 }
 
 bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee, const CheckTxInputsRules rules,

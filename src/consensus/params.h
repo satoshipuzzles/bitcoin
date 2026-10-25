@@ -171,19 +171,20 @@ struct Params {
      * measured from its own block, so rewards unlock one per block rather than
      * together at a shared release height.
      *
-     * This is independent of RDTS: it is height-based, has no expiry and does
-     * not depend on RdtsExpiryTime. It only ever adds to the maturity required
-     * by the rules above, never reduces it. Unscheduled by default.
+     * It only ever adds to the maturity required by the rules above, never
+     * reduces it. Unscheduled by default.
      *
-     * Coins mined at or above CoinbaseMaturityRollingEndCoinHeight are not
-     * covered: they keep the maturity required by the rules above. This bounds
-     * the coverage (e.g. at the first zero-subsidy height, where there is no
-     * subsidy left to protect) without ever releasing a covered coin early.
+     * If CoinbaseMaturityRollingUntilRdts is set, only coins mined while RDTS
+     * is in force are covered: a coin whose block's parent has a
+     * median-time-past at or after RdtsExpiryTime keeps the maturity required
+     * by the rules above. This is the same boundary RDTS uses for its own
+     * expiry. Expiry only ends coverage of newly mined coins; a coin covered
+     * before it still needs its full CoinbaseMaturityRolling depth.
      */
     int CoinbaseMaturityRolling{COINBASE_MATURITY};
     int CoinbaseMaturityRollingStartHeight{std::numeric_limits<int>::max()};
     int CoinbaseMaturityRollingEnforceHeight{std::numeric_limits<int>::max()};
-    int CoinbaseMaturityRollingEndCoinHeight{std::numeric_limits<int>::max()};
+    bool CoinbaseMaturityRollingUntilRdts{false};
     bool CoinbaseMaturityRollingActiveAt(int height) const
     {
         return height >= CoinbaseMaturityRollingEnforceHeight;
@@ -191,15 +192,17 @@ struct Params {
     /**
      * Consensus maturity a block at spend_height requires of a generated coin
      * mined at coin_height, under all coinbase maturity rules. Validation
-     * passes the same values to Consensus::CheckTxInputs.
+     * passes the same values to Consensus::CheckTxInputs. rolling_end_height
+     * is the first coin height the rolling rule no longer covers on the
+     * spending chain (see Consensus::CoinbaseMaturityRollingEndHeight).
      */
-    int CoinbaseMaturityRequired(int coin_height, int spend_height) const
+    int CoinbaseMaturityRequired(int coin_height, int spend_height, int rolling_end_height = std::numeric_limits<int>::max()) const
     {
         int maturity{COINBASE_MATURITY};
         if (CoinbaseMaturityLongActiveAt(spend_height) && coin_height >= CoinbaseMaturityLongStartHeight) {
             maturity = CoinbaseMaturityLong;
         }
-        if (CoinbaseMaturityRollingActiveAt(spend_height) && coin_height >= CoinbaseMaturityRollingStartHeight && coin_height < CoinbaseMaturityRollingEndCoinHeight) {
+        if (CoinbaseMaturityRollingActiveAt(spend_height) && coin_height >= CoinbaseMaturityRollingStartHeight && coin_height < rolling_end_height) {
             maturity = std::max(maturity, CoinbaseMaturityRolling);
         }
         return maturity;

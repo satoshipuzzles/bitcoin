@@ -159,15 +159,17 @@ public:
 
         // Rolling coinbase maturity: every reward from the start of the long
         // maturity window above matures over 52560 blocks (365 days of 144
-        // blocks) from its own block, with no expiry. It takes over at the
-        // window's release height, so the rewards the window holds are never
-        // released together there: one reward unlocks per block, the first at
-        // 1026000. Through 979919 the rules are unchanged.
+        // blocks) from its own block. It takes over at the window's release
+        // height, so the rewards the window holds are never released together
+        // there: one reward unlocks per block, the first at 1026000. Through
+        // 979919 the rules are unchanged.
         consensus.CoinbaseMaturityRollingStartHeight = consensus.CoinbaseMaturityLongStartHeight;
         consensus.CoinbaseMaturityRollingEnforceHeight = consensus.CoinbaseMaturityLongReleaseHeight;
         consensus.CoinbaseMaturityRolling = 52560;
-        // first zero-subsidy height (33 halvings), so the rule retires together with issuance
-        consensus.CoinbaseMaturityRollingEndCoinHeight = 6930000;
+        // Coverage ends with RDTS: rewards mined in a block whose parent's
+        // median-time-past has reached RdtsExpiryTime (above) need only the
+        // ordinary maturity. Rewards covered before that keep their full depth.
+        consensus.CoinbaseMaturityRollingUntilRdts = true;
         AddRollingCoinbaseMaturityRevalidationDeployment(consensus);
 
         consensus.nMinimumChainWork = uint256{"00000000000000000000000000000000000000013e00277374c9f9eeadc70200"};
@@ -722,8 +724,9 @@ public:
             consensus.CoinbaseMaturityRollingStartHeight = *opts.coinbase_maturity_rolling_start_height;
             consensus.CoinbaseMaturityRollingEnforceHeight = *opts.coinbase_maturity_rolling_enforce_height;
             consensus.CoinbaseMaturityRolling = *opts.coinbase_maturity_rolling;
-            if (opts.coinbase_maturity_rolling_end) {
-                consensus.CoinbaseMaturityRollingEndCoinHeight = *opts.coinbase_maturity_rolling_end;
+            if (opts.coinbase_maturity_rolling_expiry) {
+                consensus.CoinbaseMaturityRollingUntilRdts = true;
+                consensus.RdtsExpiryTime = *opts.coinbase_maturity_rolling_expiry;
             }
             AddRollingCoinbaseMaturityRevalidationDeployment(consensus);
         }

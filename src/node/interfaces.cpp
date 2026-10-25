@@ -11,6 +11,7 @@
 #include <common/args.h>
 #include <common/pcp.h>
 #include <consensus/merkle.h>
+#include <consensus/tx_verify.h>
 #include <consensus/validation.h>
 #include <deploymentstatus.h>
 #include <external_signer.h>
@@ -92,14 +93,20 @@ namespace node {
 // classes themselves are private.
 namespace {
 //! The maturity mempool policy requires for a generated coin mined at
-//! coin_height: the long maturity for every coin, raised to the rolling
-//! maturity for coins the rolling rule covers (mined at or above its start
-//! height and below its end coin height).
-int CoinbaseMaturityPolicy(const Consensus::Params& params, int coin_height)
+//! coin_height on the active chain: the long maturity for every coin, raised
+//! to the rolling maturity for coins the rolling rule covers (mined at or
+//! above its start height, and before RDTS expired if the rule ends with it).
+int CoinbaseMaturityPolicy(ChainstateManager& chainman, int coin_height)
 {
+    const Consensus::Params& params{chainman.GetConsensus()};
     int maturity{params.CoinbaseMaturityLong};
-    if (coin_height >= params.CoinbaseMaturityRollingStartHeight && coin_height < params.CoinbaseMaturityRollingEndCoinHeight) {
-        maturity = std::max(maturity, params.CoinbaseMaturityRolling);
+    if (coin_height >= params.CoinbaseMaturityRollingStartHeight) {
+        const int end_height{params.CoinbaseMaturityRollingUntilRdts
+            ? WITH_LOCK(::cs_main, return Consensus::CoinbaseMaturityRollingEndHeight(params, chainman.ActiveChain().Tip()))
+            : std::numeric_limits<int>::max()};
+        if (coin_height < end_height) {
+            maturity = std::max(maturity, params.CoinbaseMaturityRolling);
+        }
     }
     return maturity;
 }
@@ -349,7 +356,7 @@ public:
         }
         return chainman().GetParams().GenesisBlock().GetBlockTime(); // Genesis block's time of current network
     }
-    int coinbaseMaturity(int coin_height) override { return CoinbaseMaturityPolicy(chainman().GetConsensus(), coin_height); }
+    int coinbaseMaturity(int coin_height) override { return CoinbaseMaturityPolicy(chainman(), coin_height); }
     double getVerificationProgress() override
     {
         return chainman().GuessVerificationProgress(WITH_LOCK(chainman().GetMutex(), return chainman().ActiveChain().Tip()));
@@ -598,7 +605,7 @@ public:
     }
     int coinbaseMaturity(int coin_height) override
     {
-        return CoinbaseMaturityPolicy(chainman().GetConsensus(), coin_height);
+        return CoinbaseMaturityPolicy(chainman(), coin_height);
     }
     bool pruneLockExists(const std::string& name) const override
     {

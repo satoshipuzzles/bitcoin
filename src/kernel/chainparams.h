@@ -177,7 +177,9 @@ public:
         std::optional<int> coinbase_maturity_rolling_start_height{};
         std::optional<int> coinbase_maturity_rolling_enforce_height{};
         std::optional<int> coinbase_maturity_rolling{};
-        std::optional<int> coinbase_maturity_rolling_end{};
+        //! End rolling maturity coverage at this RDTS expiry (see
+        //! -testcoinbasematurityrollingexpiry). Also sets the RDTS expiry.
+        std::optional<int64_t> coinbase_maturity_rolling_expiry{};
     };
 
     static std::unique_ptr<const CChainParams> RegTest(const RegTestOptions& options);

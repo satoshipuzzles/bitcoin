@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <chain.h>
 #include <chainparams.h>
 #include <consensus/consensus.h>
 #include <coins.h>
@@ -15,6 +16,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <limits>
+#include <vector>
 
 BOOST_AUTO_TEST_SUITE(coinbase_maturity_tests)
 
@@ -87,16 +89,20 @@ BOOST_AUTO_TEST_CASE(rolling_maturity_mainnet_schedule)
     BOOST_CHECK(consensus.CoinbaseMaturityRollingActiveAt(979920));
     BOOST_CHECK(consensus.CoinbaseMaturityRollingActiveAt(std::numeric_limits<int>::max() - 1));
 
-    // Coverage ends at the first zero-subsidy height (33 halvings of 210000
-    // blocks): the last covered reward is 6929999, rewards from 6930000 on
-    // keep the maturity the earlier rules require (plain COINBASE_MATURITY,
-    // the long window being long gone by then).
-    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRollingEndCoinHeight, 33 * 210000);
-    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRollingEndCoinHeight, 6930000);
-    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRequired(6929999, 6929999 + 52560), 52560);
-    BOOST_CHECK_GT(consensus.CoinbaseMaturityRequired(6929999, 6929999 + COINBASE_MATURITY), COINBASE_MATURITY);
-    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRequired(6930000, 6930000 + COINBASE_MATURITY), COINBASE_MATURITY);
-    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRequired(7000000, 7000000 + COINBASE_MATURITY), COINBASE_MATURITY);
+    // Coverage ends with RDTS (September 1st, 2027 00:00 UTC): a reward
+    // mined in the first block whose parent has reached that median time past,
+    // or later, keeps the maturity the earlier rules require (plain
+    // COINBASE_MATURITY, the long window being over by then). A reward
+    // covered before keeps the full depth, even when spent after expiry.
+    BOOST_CHECK(consensus.CoinbaseMaturityRollingUntilRdts);
+    BOOST_CHECK_EQUAL(consensus.RdtsExpiryTime, 1819756800);
+    constexpr int END{1030000}; // stand-in for the first height past expiry
+    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRequired(END - 1, END - 1 + 52560 - 1, END), 52560);
+    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRequired(END - 1, END - 1 + 52560, END), 52560);
+    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRequired(END, END + COINBASE_MATURITY, END), COINBASE_MATURITY);
+    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRequired(END + 1, END + 1 + COINBASE_MATURITY, END), COINBASE_MATURITY);
+    // Until the chain reaches the expiry, every reward from the start is covered.
+    BOOST_CHECK_EQUAL(consensus.CoinbaseMaturityRequired(END + 1, END + 1 + COINBASE_MATURITY), 52560);
 
     BOOST_REQUIRE_EQUAL(consensus.chainstate_revalidation_deployments.size(), 2);
     const auto& deployment{consensus.chainstate_revalidation_deployments.back()};
@@ -118,14 +124,60 @@ BOOST_AUTO_TEST_CASE(rolling_maturity_mainnet_schedule)
     BOOST_CHECK_EQUAL(regtest->GetConsensus().CoinbaseMaturityRolling, 150);
     BOOST_CHECK(!regtest->GetConsensus().CoinbaseMaturityRollingActiveAt(19));
     BOOST_CHECK(regtest->GetConsensus().CoinbaseMaturityRollingActiveAt(20));
-    // Without an explicit end the coverage never ends.
-    BOOST_CHECK_EQUAL(regtest->GetConsensus().CoinbaseMaturityRollingEndCoinHeight, std::numeric_limits<int>::max());
+    // Without an expiry the coverage never ends.
+    BOOST_CHECK(!regtest->GetConsensus().CoinbaseMaturityRollingUntilRdts);
 
-    options.coinbase_maturity_rolling_end = 40;
+    options.coinbase_maturity_rolling_expiry = 1700000000;
     const auto regtest_end{CChainParams::RegTest(options)};
-    BOOST_CHECK_EQUAL(regtest_end->GetConsensus().CoinbaseMaturityRollingEndCoinHeight, 40);
-    BOOST_CHECK_EQUAL(regtest_end->GetConsensus().CoinbaseMaturityRequired(39, 39 + 150), 150);
-    BOOST_CHECK_EQUAL(regtest_end->GetConsensus().CoinbaseMaturityRequired(40, 40 + COINBASE_MATURITY), COINBASE_MATURITY);
+    BOOST_CHECK(regtest_end->GetConsensus().CoinbaseMaturityRollingUntilRdts);
+    BOOST_CHECK_EQUAL(regtest_end->GetConsensus().RdtsExpiryTime, 1700000000);
+}
+
+BOOST_AUTO_TEST_CASE(rolling_maturity_rdts_end_height)
+{
+    // A chain with one block per 600 seconds. The rolling rule stops covering
+    // rewards from the first block whose parent's median time past has
+    // reached the RDTS expiry, the same boundary RDTS itself uses.
+    constexpr int64_t T0{1700000000};
+    constexpr int N{200};
+    std::vector<CBlockIndex> blocks(N);
+    for (int i{0}; i < N; ++i) {
+        blocks[i].nHeight = i;
+        blocks[i].nTime = T0 + 600 * i;
+        blocks[i].pprev = i ? &blocks[i - 1] : nullptr;
+        blocks[i].BuildSkip();
+    }
+    // MTP of block i is the time of block i - 5 (for i >= 10).
+    BOOST_REQUIRE_EQUAL(blocks[100].GetMedianTimePast(), T0 + 600 * 95);
+
+    Consensus::Params params;
+    params.CoinbaseMaturityRollingStartHeight = 0;
+    params.CoinbaseMaturityRollingEnforceHeight = 0;
+    params.CoinbaseMaturityRolling = 500;
+    params.RdtsExpiryTime = T0 + 600 * 95; // reached by the MTP of block 100
+
+    // Not bound to RDTS: never ends.
+    BOOST_CHECK_EQUAL(Consensus::CoinbaseMaturityRollingEndHeight(params, &blocks[N - 1]), std::numeric_limits<int>::max());
+
+    params.CoinbaseMaturityRollingUntilRdts = true;
+    BOOST_CHECK_EQUAL(Consensus::CoinbaseMaturityRollingEndHeight(params, nullptr), std::numeric_limits<int>::max());
+    // Before the expiry is reached nothing is known to end.
+    BOOST_CHECK_EQUAL(Consensus::CoinbaseMaturityRollingEndHeight(params, &blocks[99]), std::numeric_limits<int>::max());
+    // Block 100 is the first parent at expiry, so block 101 is the first
+    // uncovered reward, whichever later tip the spend builds on.
+    for (const int tip : {100, 101, 150, N - 1}) {
+        BOOST_CHECK_EQUAL(Consensus::CoinbaseMaturityRollingEndHeight(params, &blocks[tip]), 101);
+    }
+    // One second later the boundary moves one block later.
+    params.RdtsExpiryTime += 1;
+    BOOST_CHECK_EQUAL(Consensus::CoinbaseMaturityRollingEndHeight(params, &blocks[100]), std::numeric_limits<int>::max());
+    BOOST_CHECK_EQUAL(Consensus::CoinbaseMaturityRollingEndHeight(params, &blocks[N - 1]), 102);
+
+    // Covered reward 100 keeps the full depth after the expiry; reward 101
+    // needs only COINBASE_MATURITY.
+    const int end{Consensus::CoinbaseMaturityRollingEndHeight(params, &blocks[N - 1])};
+    BOOST_CHECK_EQUAL(params.CoinbaseMaturityRequired(101, 101 + 500, end), 500);
+    BOOST_CHECK_EQUAL(params.CoinbaseMaturityRequired(102, 102 + COINBASE_MATURITY, end), COINBASE_MATURITY);
 }
 
 namespace {
@@ -228,7 +280,6 @@ BOOST_AUTO_TEST_CASE(rolling_maturity_clean_activation_after_release)
     params.CoinbaseMaturityRollingStartHeight = 200;
     params.CoinbaseMaturityRollingEnforceHeight = 290;
     params.CoinbaseMaturityRolling = 500;
-    params.CoinbaseMaturityRollingEndCoinHeight = 10000;
 
     const int A{params.CoinbaseMaturityRollingEnforceHeight};
     // The clean-activation precondition: every covered reward mined before A
@@ -302,8 +353,9 @@ BOOST_AUTO_TEST_CASE(rolling_maturity_check_tx_inputs)
     BOOST_CHECK(!spend_at(ROLLING_START + 7, ROLLING_START + 7 + LONG, 0));
     BOOST_CHECK(spend_at(ROLLING_START + 8, ROLLING_START + 8 + ROLLING, 0));
 
-    // With an end coin height, the reward mined just below it stays covered
-    // while the one mined at it keeps only the earlier rules.
+    // With an end height (the first reward mined after RDTS expiry), the
+    // reward mined just below it stays covered while the one mined at it
+    // keeps only the earlier rules.
     constexpr int ROLLING_END{ROLLING_START + 100};
     BOOST_CHECK(!spend_at(ROLLING_END - 1, ROLLING_END - 1 + ROLLING - 1, std::numeric_limits<int>::max(), ROLLING_END));
     BOOST_CHECK(spend_at(ROLLING_END - 1, ROLLING_END - 1 + ROLLING, std::numeric_limits<int>::max(), ROLLING_END));

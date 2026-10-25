@@ -130,33 +130,35 @@ void ReadRegTestArgs(const ArgsManager& args, CChainParams::RegTestOptions& opti
 
     if (const auto arg{args.GetArg("-testcoinbasematurityrolling")}; arg) {
         const auto values{SplitString(*arg, ':')};
-        if (values.size() != 3 && values.size() != 4) {
-            throw std::runtime_error(strprintf("Invalid format (%s) for -testcoinbasematurityrolling=<start_height>:<enforce_height>:<maturity>[:<end_coin_height>].", *arg));
+        if (values.size() != 3) {
+            throw std::runtime_error(strprintf("Invalid format (%s) for -testcoinbasematurityrolling=<start_height>:<enforce_height>:<maturity>.", *arg));
         }
 
         int32_t start_height;
         int32_t enforce_height;
         int32_t maturity;
         if (!ParseInt32(values[0], &start_height) || start_height < 0 || start_height >= std::numeric_limits<int>::max()) {
-            throw std::runtime_error(strprintf("Invalid start height (%s) for -testcoinbasematurityrolling=<start_height>:<enforce_height>:<maturity>[:<end_coin_height>].", values[0]));
+            throw std::runtime_error(strprintf("Invalid start height (%s) for -testcoinbasematurityrolling=<start_height>:<enforce_height>:<maturity>.", values[0]));
         }
         if (!ParseInt32(values[1], &enforce_height) || enforce_height < 2 || enforce_height >= std::numeric_limits<int>::max()) {
-            throw std::runtime_error(strprintf("Invalid enforce height (%s) for -testcoinbasematurityrolling=<start_height>:<enforce_height>:<maturity>[:<end_coin_height>].", values[1]));
+            throw std::runtime_error(strprintf("Invalid enforce height (%s) for -testcoinbasematurityrolling=<start_height>:<enforce_height>:<maturity>.", values[1]));
         }
         if (!ParseInt32(values[2], &maturity) || maturity <= COINBASE_MATURITY || maturity >= std::numeric_limits<int>::max()) {
-            throw std::runtime_error(strprintf("Invalid maturity (%s) for -testcoinbasematurityrolling=<start_height>:<enforce_height>:<maturity>[:<end_coin_height>]: must exceed COINBASE_MATURITY.", values[2]));
+            throw std::runtime_error(strprintf("Invalid maturity (%s) for -testcoinbasematurityrolling=<start_height>:<enforce_height>:<maturity>: must exceed COINBASE_MATURITY.", values[2]));
         }
-        if (values.size() == 4) {
-            int32_t end_coin_height;
-            if (!ParseInt32(values[3], &end_coin_height) || end_coin_height <= start_height || end_coin_height >= std::numeric_limits<int>::max()) {
-                throw std::runtime_error(strprintf("Invalid end coin height (%s) for -testcoinbasematurityrolling=<start_height>:<enforce_height>:<maturity>[:<end_coin_height>]: must exceed start_height.", values[3]));
-            }
-            options.coinbase_maturity_rolling_end = end_coin_height;
-        }
-
         options.coinbase_maturity_rolling_start_height = start_height;
         options.coinbase_maturity_rolling_enforce_height = enforce_height;
         options.coinbase_maturity_rolling = maturity;
+    }
+    if (const auto arg{args.GetArg("-testcoinbasematurityrollingexpiry")}; arg) {
+        int64_t expiry;
+        if (!options.coinbase_maturity_rolling_start_height || !ParseInt64(*arg, &expiry) || expiry <= 1296688602) {
+            throw std::runtime_error("Invalid rolling coinbase maturity expiry: requires -testcoinbasematurityrolling and a time after regtest genesis.");
+        }
+        if (options.rdts_expiry_time && *options.rdts_expiry_time != expiry) {
+            throw std::runtime_error("Rolling coinbase maturity expiry must match RDTS expiry.");
+        }
+        options.coinbase_maturity_rolling_expiry = expiry;
     }
 
     for (const std::string& strDeployment : args.GetArgs("-vbparams")) {

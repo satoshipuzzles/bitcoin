@@ -435,6 +435,7 @@ void Chainstate::MaybeUpdateMempoolForReorg(
         // If the transaction spends any coinbase outputs, it must be mature.
         if (it->GetSpendsCoinbase()) {
             const auto& consensusParams{m_chainman.GetParams().GetConsensus()};
+            const int rolling_end_height{Consensus::CoinbaseMaturityRollingEndHeight(consensusParams, m_chain.Tip())};
             for (const CTxIn& txin : tx.vin) {
                 if (m_mempool->exists(GenTxid::Txid(txin.prevout.hash))) continue;
                 const Coin& coin{CoinsTip().AccessCoin(txin.prevout)};
@@ -445,7 +446,7 @@ void Chainstate::MaybeUpdateMempoolForReorg(
                 }
                 if (coin.IsCoinBase() && consensusParams.CoinbaseMaturityRollingActiveAt(mempool_spend_height) &&
                     (int)coin.nHeight >= consensusParams.CoinbaseMaturityRollingStartHeight &&
-                    (int)coin.nHeight < consensusParams.CoinbaseMaturityRollingEndCoinHeight &&
+                    (int)coin.nHeight < rolling_end_height &&
                     mempool_spend_height - coin.nHeight < consensusParams.CoinbaseMaturityRolling) {
                     return true;
                 }
@@ -1029,7 +1030,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
                                   /*long_maturity_start_height=*/ 0,
                                   consensusParams.CoinbaseMaturityRolling,
                                   consensusParams.CoinbaseMaturityRollingActiveAt(block_height_next) ? consensusParams.CoinbaseMaturityRollingStartHeight : std::numeric_limits<int>::max(),
-                                  consensusParams.CoinbaseMaturityRollingEndCoinHeight)) {
+                                  Consensus::CoinbaseMaturityRollingEndHeight(consensusParams, m_active_chainstate.m_chain.Tip()))) {
         return false; // state filled in by CheckTxInputs
     }
 
@@ -3021,6 +3022,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     const bool long_maturity_consensus_active{consensusParams.CoinbaseMaturityLongActiveAt(pindex->nHeight)};
     const int long_maturity_start_height{long_maturity_consensus_active ? consensusParams.CoinbaseMaturityLongStartHeight : std::numeric_limits<int>::max()};
     const int rolling_maturity_start_height{consensusParams.CoinbaseMaturityRollingActiveAt(pindex->nHeight) ? consensusParams.CoinbaseMaturityRollingStartHeight : std::numeric_limits<int>::max()};
+    const int rolling_maturity_end_height{Consensus::CoinbaseMaturityRollingEndHeight(consensusParams, pindex->pprev)};
 
     std::vector<int> prevheights;
     CAmount nFees = 0;
@@ -3044,7 +3046,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
                                           long_maturity_start_height,
                                           consensusParams.CoinbaseMaturityRolling,
                                           rolling_maturity_start_height,
-                                          consensusParams.CoinbaseMaturityRollingEndCoinHeight)) {
+                                          rolling_maturity_end_height)) {
                 // Any transaction validation failure in ConnectBlock is a block consensus failure
                 state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
                               tx_state.GetRejectReason(),
