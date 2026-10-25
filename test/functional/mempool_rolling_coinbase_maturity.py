@@ -10,7 +10,9 @@ reward from START on. Each reward then unlocks ROLLING_MATURITY blocks after
 its own block, one per block, instead of all of them together at RELEASE.
 
 The same checks run on three nodes, without RDTS, with RDTS active, and with
-RDTS already expired, since the rule must not depend on RDTS.
+RDTS already expired: unless the schedule also sets
+-testcoinbasematurityrollingexpiry (see feature_rolling_maturity_end_bound.py),
+the rule does not follow RDTS.
 """
 
 from test_framework.blocktools import (
@@ -91,6 +93,8 @@ class RollingCoinbaseMaturityTest(BitcoinTestFramework):
         assert_equal(deployment["maturity"], ROLLING_MATURITY)
         assert "height_end" not in deployment
         assert "expiry_time" not in deployment
+        assert "coinbase_expiry_time" not in deployment
+        assert "coinbase_end_height" not in deployment
         assert_equal(deployment["active"], active)
         rules = ["segwit"] + (["blake2b"] if self.rdts is not None else [])
         assert_equal(DEPLOYMENT in node.getblocktemplate({"rules": rules})["rules"], active)
@@ -110,8 +114,11 @@ class RollingCoinbaseMaturityTest(BitcoinTestFramework):
             (["-testcoinbasematurityrolling=99999999999999999999:200:200"], "Invalid start height"),
             (["-testcoinbasematurityrolling=150:1:200"], "Invalid enforce height"),
             ([f"-testcoinbasematurityrolling=150:200:{COINBASE_MATURITY}"], "Invalid maturity"),
-            (["-testcoinbasematurityrolling=150:200:200:150"], "Invalid end coin height"),
-            (["-testcoinbasematurityrolling=150:200:200:149"], "Invalid end coin height"),
+            (["-testcoinbasematurityrolling=150:200:200:300"], "Invalid format"),
+            (["-testcoinbasematurityrollingexpiry=1700000000"], "Invalid rolling coinbase maturity expiry"),
+            (["-testcoinbasematurityrolling=150:200:200", "-testcoinbasematurityrollingexpiry=1296688602"], "Invalid rolling coinbase maturity expiry"),
+            (["-testcoinbasematurityrolling=150:200:200", "-testcoinbasematurityrollingexpiry=1700000000",
+              f"-testactivationheight=blake2b@{FORK_HEIGHT}", "-rdtsexpiry=1700000001"], "must match RDTS expiry"),
         ]:
             node.assert_start_raises_init_error(extra_args=args, expected_msg=msg, match=ErrorMatch.PARTIAL_REGEX)
         self.start_node(0, extra_args=self.extra_args[0].copy())
